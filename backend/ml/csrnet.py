@@ -94,7 +94,7 @@ class CSRNet(nn.Module):
 
     def load_weights(self, path: str) -> None:
         """Load a PyTorch checkpoint (``.pth`` or ``.pth.tar``); prints confirmation."""
-        raw = torch.load(path, map_location="cpu")
+        raw = torch.load(path, map_location="cpu", weights_only=False)
         if isinstance(raw, dict):
             if "state_dict" in raw:
                 state = raw["state_dict"]
