@@ -101,7 +101,6 @@ def get_mock_payload():
     }
 
 async def check_and_create_incidents(payload: dict, request):
-    db_gen = request.app.state.get_db()
     from models.db import SessionLocal, Incident
     db = SessionLocal()
     try:
