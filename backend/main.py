@@ -18,30 +18,83 @@ app.add_middleware(
 app.include_router(incidents.router, prefix="/api")
 app.include_router(stream.router)
 
-app.state.latest_payload = {}
-app.state.simulator = None
-app.state.model = None
 
 #NEEDDDD TO CHANGE WHEN IMPLEMENTING ML
 #will replace the latest_payload
 #so that it no longer calls the mock payload
 async def pipeline_loop():
+    from ml.pipeline import build_grid, aggregate_density, apply_surge_to_counts, compute_levels, build_websocket_payload
+    from models.db import SessionLocal, ZoneEvent
+    from datetime import datetime
+
+    grid = None
+    loop = asyncio.get_event_loop()
+
     while True:
         try:
-            # Phase 1 ML code will slot in here once ready
-            # For now latest_payload stays empty and WebSocket uses mock
-            if app.state.simulator is not None:
-                frame = app.state.simulator.get_latest_frame()
-                if frame is not None and app.state.model is not None:
-                    # this gets filled in when ML engineer finishes Phase 1
-                    pass
+            if app.state.simulator is not None and app.state.model is not None:
+                # get latest frame from simulator
+                frame = await loop.run_in_executor(None, app.state.simulator.get_latest_frame)
+
+                if frame is not None:
+                    # build grid on first frame
+                    if grid is None:
+                        h, w = frame.shape[0], frame.shape[1]
+                        grid = build_grid(h, w)
+
+                    # run ML inference in thread pool so it doesn't block async loop
+                    density_map = await loop.run_in_executor(None, app.state.model.infer, frame)
+
+                    # aggregate density into grid cells
+                    cells = aggregate_density(density_map, grid)
+
+                    # apply any active surge injection
+                    surge = app.state.simulator.get_active_surge()
+                    cells = apply_surge_to_counts(cells, surge)
+
+                    # compute levels and growth rates
+                    cells = compute_levels(cells, app.state.cell_history)
+
+                    # build the websocket payload
+                    payload = build_websocket_payload("festival_v1", cells)
+                    app.state.latest_payload = payload
+
+                    # log zone events to database in background
+                    def write_zone_events():
+                        db = SessionLocal()
+                        try:
+                            for cell in cells:
+                                event = ZoneEvent(
+                                    zone_id=cell["id"],
+                                    venue_id="festival_v1",
+                                    timestamp=datetime.utcnow(),
+                                    count=cell["count"],
+                                    level=cell["level"],
+                                    growth_rate=cell["growth_rate"],
+                                )
+                                db.add(event)
+                            db.commit()
+                        except Exception as e:
+                            print(f"Zone event write error: {e}")
+                        finally:
+                            db.close()
+
+                    await loop.run_in_executor(None, write_zone_events)
+
         except Exception as e:
             print(f"Pipeline loop error: {e}")
+
         await asyncio.sleep(1)
 
 @app.on_event("startup")
 async def startup():
     print("Starting CrowdSense API...")
+
+    # initialize app state
+    app.state.latest_payload = {}
+    app.state.simulator = None
+    app.state.model = None
+    app.state.cell_history = {}
 
     # initialize database and seed guards
     init_db()
@@ -80,6 +133,8 @@ async def startup():
     asyncio.create_task(pipeline_loop())
     print("Pipeline loop started")
     print("CrowdSense API ready!")
+
+
 
 @app.get("/health")
 def health():
