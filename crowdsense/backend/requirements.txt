@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+websockets
+opencv-python
+torch
+torchvision
+numpy
+Pillow
+sqlalchemy
+pydantic
+python-multipart
