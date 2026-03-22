@@ -124,13 +124,10 @@ def reset_density_session(app):
     """New play session: clear ML buffers, heatmap history, and restart the video simulator."""
     app.state.latest_payload = {}
     app.state.latest_snapshot = {}
-    app.state.session_play_heatmap_count = 0
-    app.state.density_finalize_requested = False
-    app.state.density_finalize_complete = False
+    app.state.heatmap_storage = {}
     app.state.snapshot_index_counter = 0
     app.state.cell_history = {}
     app.state.pipeline_grid_reset = True
-    app.state.pipeline_snapshot_ts_reset = True
     sim = getattr(app.state, "simulator", None)
     if sim:
         try:
@@ -139,23 +136,49 @@ def reset_density_session(app):
             print(f"Simulator reset: {e}")
 
 
+def _heatmap_snap_for_playback_loop(app) -> dict:
+    """Pick stored snap 1/2/3 from the first file pass; display follows simulator playback_loop."""
+    sim = getattr(app.state, "simulator", None)
+    pl = 1
+    if sim is not None:
+        try:
+            pl = sim.get_playback_loop()
+        except Exception:
+            pl = 1
+    want = min(max(pl, 1), 3)
+    storage = getattr(app.state, "heatmap_storage", None) or {}
+    for s in range(want, 0, -1):
+        cand = storage.get(s)
+        if isinstance(cand, dict) and cand.get("heatmap_jpeg_b64"):
+            return dict(cand)
+    return dict(getattr(app.state, "latest_snapshot", None) or {})
+
+
 def merge_snapshot_into_ws_payload(app, payload: dict) -> dict:
-    """Attach JPEG snapshot when available; final frame uses paired_payload so grid matches heatmap."""
-    snap = getattr(app.state, "latest_snapshot", None) or {}
+    """Attach JPEG snapshot when available; paired_payload keeps grid aligned with that heatmap."""
+    snap = _heatmap_snap_for_playback_loop(app)
     b64 = snap.get("heatmap_jpeg_b64")
     has_latest = bool(getattr(app.state, "latest_payload", None))
-    show = bool(b64) and (has_latest or snap.get("is_session_final"))
+    show = bool(b64) and has_latest
     out = dict(payload)
     if show:
+        sim = getattr(app.state, "simulator", None)
+        if sim is not None:
+            try:
+                out["playback_loop"] = sim.get_playback_loop()
+            except Exception:
+                pass
         out["heatmap_jpeg_b64"] = b64
         out["snapshot_index"] = snap.get("snapshot_index", 0)
         out["snapshot_at_sec"] = snap.get("snapshot_at_sec")
-        if snap.get("is_session_final") and isinstance(snap.get("paired_payload"), dict):
+        if snap.get("heatmap_slot_label") is not None:
+            out["heatmap_slot_label"] = snap["heatmap_slot_label"]
+        if isinstance(snap.get("paired_payload"), dict):
             pp = snap["paired_payload"]
             for key in ("grid", "alerts", "total_count", "timestamp", "venue_id"):
                 if key in pp:
                     out[key] = pp[key]
-        out["density_phase"] = "session_final_ready" if snap.get("is_session_final") else "live"
+        out["density_phase"] = "live"
         return out
     out["heatmap_jpeg_b64"] = None
     out["snapshot_index"] = 0
@@ -223,17 +246,7 @@ async def density_websocket(websocket: WebSocket):
                     if isinstance(data, dict):
                         if data.get("session_restart"):
                             reset_density_session(app)
-                        if data.get("video_ended"):
-                            app.state.client_playback_active = False
-                            app.state.density_finalize_requested = True
-                            app.state.density_finalize_complete = False
-                            sim = getattr(app.state, "simulator", None)
-                            if sim:
-                                try:
-                                    sim.pause()
-                                except Exception:
-                                    pass
-                        elif "playback_playing" in data:
+                        if "playback_playing" in data:
                             app.state.client_playback_active = bool(data["playback_playing"])
                 except json.JSONDecodeError:
                     pass

@@ -100,7 +100,7 @@ function wsDensityUrl() {
 const wsControlRef = { send: null }
 
 /**
- * @param {Partial<{ playback_playing: boolean, video_ended: boolean, session_restart: boolean }>} overrides
+ * @param {Partial<{ playback_playing: boolean, session_restart: boolean }>} overrides
  */
 export function sendWsControl(overrides = {}) {
   const send = wsControlRef.send
@@ -108,7 +108,6 @@ export function sendWsControl(overrides = {}) {
   const s = useStreamStore.getState()
   send({
     playback_playing: overrides.playback_playing ?? s.videoPlaying,
-    video_ended: overrides.video_ended ?? false,
     session_restart: overrides.session_restart ?? false,
   })
 }

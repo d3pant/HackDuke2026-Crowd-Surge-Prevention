@@ -55,34 +55,32 @@ export default function App() {
   const setVideoPlaying = useStreamStore((s) => s.setVideoPlaying)
   const demoLiveMode = useStreamStore((s) => s.demoLiveMode)
   const setDemoLiveMode = useStreamStore((s) => s.setDemoLiveMode)
-  const awaitingFinalDensity = useStreamStore((s) => s.awaitingFinalDensity)
-  const setAwaitingFinalDensity = useStreamStore((s) => s.setAwaitingFinalDensity)
   const connectionStatus = useStreamStore((s) => s.connectionStatus)
 
   const frozenPayloadRef = useRef(null)
   const lastHeatmapB64Ref = useRef(null)
   const videoCleanupRef = useRef(null)
+  /** Real API: only the first Play after load should reset the backend session (~15s/snap). Loop/buffer glitches must not call session_restart. */
+  const mlSessionStartedRef = useRef(false)
 
-  const liveMode = videoPlaying || demoLiveMode || awaitingFinalDensity
-
-  useEffect(() => {
-    if (livePayload?.density_phase === 'session_final_ready') {
-      setAwaitingFinalDensity(false)
-    }
-  }, [livePayload?.density_phase, setAwaitingFinalDensity])
+  const mockWs = import.meta.env.VITE_MOCK_WS === 'true'
+  /** Mock: freeze grid/heatmap when video/demo stops. Real API: always show latest WS (pass/snap updates keep flowing). */
+  const freezeDashboard = mockWs && !videoPlaying && !demoLiveMode
 
   useEffect(() => {
-    if (!liveMode) {
+    if (freezeDashboard) {
       frozenPayloadRef.current = useStreamStore.getState().payload
+    } else {
+      frozenPayloadRef.current = null
     }
-  }, [liveMode])
+  }, [freezeDashboard])
 
   useEffect(() => {
-    if (!liveMode) return
+    if (freezeDashboard) return
     if (livePayload?.heatmap_jpeg_b64) {
       lastHeatmapB64Ref.current = livePayload.heatmap_jpeg_b64
     }
-  }, [liveMode, livePayload?.heatmap_jpeg_b64])
+  }, [freezeDashboard, livePayload?.heatmap_jpeg_b64])
 
   /**
    * Sync dashboard “live” mode from the real media element (play/pause from
@@ -109,38 +107,33 @@ export default function App() {
           return
         }
         if (playing && !wasPlaying) {
-          el.currentTime = 0
-          setAwaitingFinalDensity(false)
-          sendWsControl({ playback_playing: true, session_restart: true })
+          if (!mlSessionStartedRef.current) {
+            mlSessionStartedRef.current = true
+            el.currentTime = 0
+            sendWsControl({ playback_playing: true, session_restart: true })
+          } else {
+            sendWsControl({ playback_playing: true, session_restart: false })
+          }
         } else {
           sendWsControl({ playback_playing: playing })
         }
       }
 
-      const onEnded = () => {
-        setVideoPlaying(false)
-        if (mock) return
-        sendWsControl({ playback_playing: false, video_ended: true })
-        setAwaitingFinalDensity(true)
-      }
-
       el.addEventListener('play', sync)
       el.addEventListener('pause', sync)
-      el.addEventListener('playing', sync)
-      el.addEventListener('ended', onEnded)
       sync()
 
       videoCleanupRef.current = () => {
         el.removeEventListener('play', sync)
         el.removeEventListener('pause', sync)
-        el.removeEventListener('playing', sync)
-        el.removeEventListener('ended', onEnded)
       }
     },
-    [setVideoPlaying, setAwaitingFinalDensity],
+    [setVideoPlaying],
   )
 
-  const displayPayload = liveMode ? livePayload : frozenPayloadRef.current
+  const displayPayload = freezeDashboard
+    ? (frozenPayloadRef.current ?? livePayload)
+    : livePayload
 
   const heatmapB64ForDisplay =
     displayPayload?.heatmap_jpeg_b64 ?? lastHeatmapB64Ref.current
@@ -185,14 +178,27 @@ export default function App() {
               {displayPayload.snapshot_index != null && displayPayload.snapshot_index > 0 && (
                 <span className="ml-2 text-muted">
                   · snap #{displayPayload.snapshot_index}
+                  {displayPayload.heatmap_slot_label != null && (
+                    <span className="ml-1">({displayPayload.heatmap_slot_label})</span>
+                  )}
                 </span>
               )}
             </span>
           )}
           <span className="ml-2 text-muted">
-            · live {liveMode ? 'on' : 'off'}
-            {awaitingFinalDensity && ' · final snapshot…'}
-            {demoLiveMode && !videoPlaying && ' · demo (no video)'}
+            {mockWs ? (
+              <>
+                · live {videoPlaying || demoLiveMode ? 'on' : 'off'}
+                {demoLiveMode && !videoPlaying && ' · demo (no video)'}
+              </>
+            ) : (
+              <>
+                · video {videoPlaying ? 'playing' : 'paused'}
+              </>
+            )}
+            {displayPayload?.playback_loop != null && (
+              <span className="ml-1 font-mono">· pass {displayPayload.playback_loop}</span>
+            )}
           </span>
         </span>
       </header>
@@ -248,19 +254,20 @@ export default function App() {
                 playsInline
                 muted
                 preload="auto"
-                loop={false}
+                loop
                 onError={() => {
                   if (import.meta.env.VITE_MOCK_WS === 'true') startMockDemo()
                 }}
               />
             </div>
             <p className="mt-2 text-[11px] text-muted">
-              Each play starts from the beginning and resets the zone matrix and heatmap session.
-              While playing, the API emits at most <strong>three</strong> density JPEGs (tune with{' '}
-              <code className="text-ink/80">DENSITY_PLAY_SNAPSHOT_MAX</code>
-              ). When the clip <strong>ends</strong> (not pause), the server runs one more infer on
-              the last frame; the UI waits for that snapshot so the grid matches the heatmap. Pause
-              does not end the session.
+              The feed <strong>loops</strong>. The backend captures <strong>three</strong> snapshots in
+              the <strong>first</strong> file pass (begin / mid / end). Pass <strong>2</strong> shows the
+              middle JPEG; pass <strong>3+</strong> shows the end. Each CSRNet snapshot can take{' '}
+              <strong>~10–20s</strong> on CPU—only the <strong>first</strong> Play after load resets the
+              ML session; looping the clip does not. <strong>Reload the page</strong> to start a fresh
+              session. Faster runs: set env <code className="text-ink/80">CSRNET_INPUT_SQUARE=384</code>{' '}
+              (default 512).
             </p>
           </PanelShell>
         </main>
@@ -271,7 +278,7 @@ export default function App() {
             {snapshotImageSrc ? (
               <div className="flex min-h-[200px] flex-1 items-center justify-center overflow-auto rounded bg-black/30">
                 <img
-                  key={`snap-${displayPayload?.snapshot_index ?? 0}-${heatmapB64ForDisplay?.length ?? 0}`}
+                  key={`snap-${displayPayload?.playback_loop ?? 0}-${displayPayload?.snapshot_index ?? 0}-${heatmapB64ForDisplay?.length ?? 0}`}
                   src={snapshotImageSrc}
                   alt="Density snapshot: frame blend, zone grid, and density color scale"
                   className="max-h-full w-full max-w-full object-contain object-top"

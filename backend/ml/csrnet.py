@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -62,7 +64,7 @@ class CSRNet(nn.Module):
 
         orig_h, orig_w = frame_bgr.shape[0], frame_bgr.shape[1]
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        square = 512
+        square = max(256, min(1024, int(os.getenv("CSRNET_INPUT_SQUARE", "512"))))
         scale = min(square / orig_h, square / orig_w)
         new_h = max(1, int(round(orig_h * scale)))
         new_w = max(1, int(round(orig_w * scale)))

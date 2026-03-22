@@ -40,9 +40,6 @@ async def pipeline_loop():
 
     grid = None
     loop = asyncio.get_event_loop()
-    last_snapshot_ts = 0.0
-    snapshot_interval = float(os.getenv("SNAPSHOT_INTERVAL_SEC", "1"))
-    play_snapshot_max = int(os.getenv("DENSITY_PLAY_SNAPSHOT_MAX", "3"))
     jpeg_q = int(os.getenv("SNAPSHOT_JPEG_QUALITY", "78"))
 
     def write_zone_events_for_cells(cells):
@@ -69,92 +66,67 @@ async def pipeline_loop():
             if getattr(app.state, "pipeline_grid_reset", False):
                 grid = None
                 app.state.pipeline_grid_reset = False
-            if getattr(app.state, "pipeline_snapshot_ts_reset", False):
-                last_snapshot_ts = 0.0
-                app.state.pipeline_snapshot_ts_reset = False
-
             sim_ok = app.state.simulator is not None and app.state.model is not None
-
-            # One-shot last-frame density + JPEG after <video> ended (client sends video_ended).
-            if getattr(app.state, "density_finalize_requested", False):
-                if not sim_ok:
-                    app.state.density_finalize_requested = False
-                    app.state.density_finalize_complete = True
-                else:
-                    frame = await loop.run_in_executor(None, app.state.simulator.get_latest_frame)
-                    if frame is not None:
-                        if grid is None:
-                            h, w = frame.shape[0], frame.shape[1]
-                            grid = build_grid(h, w)
-                        density_map = await loop.run_in_executor(None, app.state.model.infer, frame)
-                        cells = aggregate_density(density_map, grid)
-                        surge = app.state.simulator.get_active_surge()
-                        cells = apply_surge_to_counts(cells, surge)
-                        cells = compute_levels(cells, app.state.cell_history)
-                        payload = build_websocket_payload("festival_v1", cells)
-                        app.state.latest_payload = copy.deepcopy(payload)
-
-                        def encode_final():
-                            return snapshot_overlay_jpeg_b64(frame, density_map, jpeg_quality=jpeg_q)
-
-                        now = time.time()
-                        b64 = await loop.run_in_executor(None, encode_final)
-                        app.state.latest_snapshot = {
-                            "heatmap_jpeg_b64": b64,
-                            "snapshot_index": app.state.snapshot_index_counter,
-                            "snapshot_at_sec": now,
-                            "paired_payload": copy.deepcopy(payload),
-                            "is_session_final": True,
-                        }
-                        app.state.snapshot_index_counter += 1
-                        await loop.run_in_executor(None, write_zone_events_for_cells, cells)
-                    app.state.density_finalize_requested = False
-                    app.state.density_finalize_complete = True
-                await asyncio.sleep(1)
-                continue
 
             if not sim_ok:
                 await asyncio.sleep(1)
                 continue
 
-            if getattr(app.state, "client_playback_active", False):
-                frame = await loop.run_in_executor(None, app.state.simulator.get_latest_frame)
+            # Heatmap jobs must drain even if the user pauses the HTML video — otherwise slots 2/3
+            # never get encoded. Only skip cheap "latest frame" inference when paused and queue empty.
+            played = getattr(app.state, "client_playback_active", False)
+            max_steps = 8
+            slot_labels = {1: "beginning", 2: "middle", 3: "end"}
+            while max_steps > 0:
+                max_steps -= 1
+                frame, heat_slot = await loop.run_in_executor(
+                    None, app.state.simulator.consume_frame_and_snapshot_slot
+                )
+                if frame is None:
+                    break
+                if heat_slot is None and not played:
+                    break
 
-                if frame is not None:
-                    if grid is None:
-                        h, w = frame.shape[0], frame.shape[1]
-                        grid = build_grid(h, w)
+                if grid is None:
+                    h, w = frame.shape[0], frame.shape[1]
+                    grid = build_grid(h, w)
 
-                    density_map = await loop.run_in_executor(None, app.state.model.infer, frame)
-                    cells = aggregate_density(density_map, grid)
-                    surge = app.state.simulator.get_active_surge()
-                    cells = apply_surge_to_counts(cells, surge)
-                    cells = compute_levels(cells, app.state.cell_history)
-                    payload = build_websocket_payload("festival_v1", cells)
-                    app.state.latest_payload = copy.deepcopy(payload)
+                density_map = await loop.run_in_executor(None, app.state.model.infer, frame)
+                cells = aggregate_density(density_map, grid)
+                surge = app.state.simulator.get_active_surge()
+                cells = apply_surge_to_counts(cells, surge)
+                cells = compute_levels(cells, app.state.cell_history)
+                payload = build_websocket_payload("festival_v1", cells)
+                app.state.latest_payload = copy.deepcopy(payload)
 
-                    now = time.time()
-                    count = getattr(app.state, "session_play_heatmap_count", 0)
-                    if count < play_snapshot_max and now - last_snapshot_ts >= snapshot_interval:
-                        last_snapshot_ts = now
+                now = time.time()
+                if heat_slot is not None:
 
-                        def encode_snapshot():
-                            return snapshot_overlay_jpeg_b64(
-                                frame, density_map, jpeg_quality=jpeg_q
-                            )
+                    def encode_snapshot():
+                        return snapshot_overlay_jpeg_b64(
+                            frame, density_map, jpeg_quality=jpeg_q
+                        )
 
-                        b64 = await loop.run_in_executor(None, encode_snapshot)
-                        app.state.latest_snapshot = {
-                            "heatmap_jpeg_b64": b64,
-                            "snapshot_index": app.state.snapshot_index_counter,
-                            "snapshot_at_sec": now,
-                            "paired_payload": copy.deepcopy(payload),
-                            "is_session_final": False,
-                        }
-                        app.state.snapshot_index_counter += 1
-                        app.state.session_play_heatmap_count = count + 1
+                    b64 = await loop.run_in_executor(None, encode_snapshot)
+                    snap_dict = {
+                        "heatmap_jpeg_b64": b64,
+                        "snapshot_index": int(heat_slot),
+                        "snapshot_at_sec": now,
+                        "paired_payload": copy.deepcopy(payload),
+                        "heatmap_slot_label": slot_labels.get(int(heat_slot)),
+                    }
+                    app.state.latest_snapshot = snap_dict
+                    app.state.snapshot_index_counter = int(heat_slot)
+                    storage = getattr(app.state, "heatmap_storage", None)
+                    if storage is None:
+                        storage = {}
+                        app.state.heatmap_storage = storage
+                    storage[int(heat_slot)] = copy.deepcopy(snap_dict)
 
-                    await loop.run_in_executor(None, write_zone_events_for_cells, cells)
+                await loop.run_in_executor(None, write_zone_events_for_cells, cells)
+
+                if heat_slot is None:
+                    break
 
         except Exception as e:
             print(f"Pipeline loop error: {e}")
@@ -226,12 +198,9 @@ async def startup():
     # initialize app state
     app.state.latest_payload = {}
     app.state.latest_snapshot = {}
+    app.state.heatmap_storage = {}
     app.state.snapshot_index_counter = 0
-    app.state.session_play_heatmap_count = 0
-    app.state.density_finalize_requested = False
-    app.state.density_finalize_complete = False
     app.state.pipeline_grid_reset = False
-    app.state.pipeline_snapshot_ts_reset = False
     app.state.demo_video_path = None
     app.state.simulator = None
     app.state.model = None

@@ -19,12 +19,9 @@ export const useStreamStore = create((set) => ({
   videoPlaying: false,
   /** Mock mode: run live matrix/heatmap without a working HTML5 video (API down or no MP4). */
   demoLiveMode: false,
-  /** Real API: stay “live” until the server finishes the last-frame density snapshot after video ends. */
-  awaitingFinalDensity: false,
   setPayload: (payload) => set({ payload }),
   setSelectedZone: (zoneId) => set({ selectedZoneId: zoneId }),
   setConnectionStatus: (status) => set({ connectionStatus: status }),
   setVideoPlaying: (videoPlaying) => set({ videoPlaying }),
   setDemoLiveMode: (demoLiveMode) => set({ demoLiveMode }),
-  setAwaitingFinalDensity: (awaitingFinalDensity) => set({ awaitingFinalDensity }),
 }))
