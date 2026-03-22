@@ -132,6 +132,7 @@ export function useWebSocket() {
     let ws
     let reconnectTimer
     let cancelled = false
+    let gateTimer
 
     const connect = () => {
       if (cancelled) return
@@ -156,6 +157,8 @@ export function useWebSocket() {
       ws.onmessage = (ev) => {
         try {
           const data = JSON.parse(ev.data)
+          const src = useStreamStore.getState().densitySource
+          if (src === 'baked') return
           setState({ payload: data })
         } catch {
           /* ignore malformed */
@@ -175,11 +178,21 @@ export function useWebSocket() {
       }
     }
 
-    connect()
+    const waitGateAndConnect = () => {
+      if (cancelled) return
+      if (useStreamStore.getState().bakeGateReady) {
+        connect()
+        return
+      }
+      gateTimer = window.setTimeout(waitGateAndConnect, 150)
+    }
+
+    waitGateAndConnect()
 
     return () => {
       cancelled = true
       wsControlRef.send = null
+      clearTimeout(gateTimer)
       clearTimeout(reconnectTimer)
       if (ws && ws.readyState === WebSocket.OPEN) ws.close()
     }

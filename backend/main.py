@@ -12,6 +12,8 @@ import time
 from models.db import init_db
 from routers import incidents, stream
 
+from ml.bake_demo import precompute_demo_bundle_sync
+
 app = FastAPI(title="CrowdSense API")
 
 app.add_middleware(
@@ -40,8 +42,6 @@ async def pipeline_loop():
 
     grid = None
     loop = asyncio.get_event_loop()
-    jpeg_q = int(os.getenv("SNAPSHOT_JPEG_QUALITY", "78"))
-
     def write_zone_events_for_cells(cells):
         db = SessionLocal()
         try:
@@ -63,6 +63,12 @@ async def pipeline_loop():
 
     while True:
         try:
+            if getattr(app.state, "density_bake_ok", False):
+                await asyncio.sleep(1)
+                continue
+            if getattr(app.state, "density_bake_status", "pending") == "pending":
+                await asyncio.sleep(0.25)
+                continue
             if getattr(app.state, "pipeline_grid_reset", False):
                 grid = None
                 app.state.pipeline_grid_reset = False
@@ -103,9 +109,7 @@ async def pipeline_loop():
                 if heat_slot is not None:
 
                     def encode_snapshot():
-                        return snapshot_overlay_jpeg_b64(
-                            frame, density_map, jpeg_quality=jpeg_q
-                        )
+                        return snapshot_overlay_jpeg_b64(frame, density_map)
 
                     b64 = await loop.run_in_executor(None, encode_snapshot)
                     snap_dict = {
@@ -167,6 +171,38 @@ async def load_model_background():
         print(f"Model not available yet: {e}")
 
 
+async def density_bake_task():
+    """Three infer passes (begin / mid / end) before the UI unblocks."""
+    app.state.density_bake_status = "pending"
+    app.state.density_bake_ok = False
+    app.state.density_bake_bundle = None
+    app.state.density_bake_error = None
+    path = getattr(app.state, "demo_video_path", None) or _resolve_demo_video_path()
+    model = getattr(app.state, "model", None)
+    if not path or not model:
+        app.state.density_bake_error = "missing_demo_video_or_model"
+        app.state.density_bake_status = "ready"
+        print("Density bake skipped: no video or no model")
+        return
+    loop = asyncio.get_event_loop()
+    try:
+        print(f"Baking 3 density snapshots from {os.path.basename(path)} (may take a while on CPU)…")
+        bundle = await loop.run_in_executor(None, precompute_demo_bundle_sync, path, model)
+        app.state.density_bake_bundle = bundle
+        app.state.density_bake_ok = True
+        print("Density bake complete.")
+    except Exception as e:
+        app.state.density_bake_error = str(e)
+        print(f"Density bake failed: {e}")
+    finally:
+        app.state.density_bake_status = "ready"
+
+
+async def startup_ml_chain():
+    await load_model_background()
+    await density_bake_task()
+
+
 def _resolve_demo_video_path() -> Optional[str]:
     """
     Prefer ``data/demo_footage/test.mp4``, then any other ``.mp4`` in that folder,
@@ -206,6 +242,10 @@ async def startup():
     app.state.model = None
     app.state.cell_history = {}
     app.state.client_playback_active = False
+    app.state.density_bake_status = "pending"
+    app.state.density_bake_ok = False
+    app.state.density_bake_bundle = None
+    app.state.density_bake_error = None
 
     # initialize database and seed guards
     init_db()
@@ -227,10 +267,7 @@ async def startup():
     else:
         print("No demo footage found — simulator not started (add data/demo_footage/test.mp4)")
 
-    # Load PyTorch in a thread so HTTP / health / API respond immediately
-    asyncio.create_task(load_model_background())
-
-    # start background pipeline loop
+    asyncio.create_task(startup_ml_chain())
     asyncio.create_task(pipeline_loop())
     print("Pipeline loop started")
     print("CrowdSense API ready!")
@@ -265,4 +302,31 @@ def demo_video():
         filename=os.path.basename(path),
     )
 
+
+@app.get("/api/density/bake-status")
+def density_bake_status():
+    st = getattr(app.state, "density_bake_status", "pending")
+    out: dict = {"status": st}
+    if st == "ready":
+        out["ok"] = getattr(app.state, "density_bake_ok", False)
+        err = getattr(app.state, "density_bake_error", None)
+        if err:
+            out["error"] = err
+        b = getattr(app.state, "density_bake_bundle", None)
+        if b:
+            out["duration_sec"] = b.get("duration_sec")
+            out["frame_count"] = b.get("frame_count")
+    return out
+
+
+@app.get("/api/density/bake")
+def density_bake_get():
+    if getattr(app.state, "density_bake_status", "") != "ready":
+        raise HTTPException(status_code=503, detail="Bake not ready")
+    if not getattr(app.state, "density_bake_ok", False):
+        raise HTTPException(
+            status_code=404,
+            detail=getattr(app.state, "density_bake_error", None) or "Bake failed",
+        )
+    return getattr(app.state, "density_bake_bundle", {})
 

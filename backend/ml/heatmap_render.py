@@ -3,11 +3,27 @@
 from __future__ import annotations
 
 import base64
+import os
 
 import cv2
 import numpy as np
 
 from ml.pipeline import GRID_COLS, GRID_ROWS
+
+
+def _default_jpeg_quality() -> int:
+    """SNAPSHOT_JPEG_QUALITY env (30–95); lower = faster encode, smaller files."""
+    return max(30, min(95, int(os.getenv("SNAPSHOT_JPEG_QUALITY", "65"))))
+
+
+def _jpeg_encode_params(quality: int) -> list[int]:
+    q = max(30, min(95, int(quality)))
+    params = [int(cv2.IMWRITE_JPEG_QUALITY), q]
+    # Faster baseline JPEG (skip Huffman table optimization pass when supported).
+    opt = getattr(cv2, "IMWRITE_JPEG_OPTIMIZE", None)
+    if opt is not None:
+        params.extend([int(opt), 0])
+    return params
 
 
 def _colormap_id() -> int:
@@ -104,13 +120,14 @@ def snapshot_overlay_jpeg_b64(
     frame_bgr: np.ndarray,
     density: np.ndarray,
     scale: str = "log",
-    jpeg_quality: int = 85,
+    jpeg_quality: int | None = None,
 ) -> str:
     """Full snapshot image as base64 JPEG (no data URL prefix)."""
+    q = _default_jpeg_quality() if jpeg_quality is None else jpeg_quality
     s = float(np.sum(density))
     caption = f"Density snapshot  (map sum = {s:.1f})"
     bgr = compose_snapshot_overlay_bgr(frame_bgr, density, caption, scale=scale)
-    ok, buf = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), int(jpeg_quality)])
+    ok, buf = cv2.imencode(".jpg", bgr, _jpeg_encode_params(q))
     if not ok:
         raise RuntimeError("cv2.imencode failed for snapshot JPEG")
     return base64.b64encode(buf.tobytes()).decode("ascii")
@@ -119,11 +136,12 @@ def snapshot_overlay_jpeg_b64(
 def density_to_heatmap_jpeg_b64(
     density: np.ndarray,
     scale: str = "log",
-    jpeg_quality: int = 85,
+    jpeg_quality: int | None = None,
 ) -> str:
     """Encode density map only (no frame) as base64 JPEG — legacy helper."""
+    q = _default_jpeg_quality() if jpeg_quality is None else jpeg_quality
     bgr = density_to_colormap_bgr(density, scale=scale)
-    ok, buf = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), int(jpeg_quality)])
+    ok, buf = cv2.imencode(".jpg", bgr, _jpeg_encode_params(q))
     if not ok:
         raise RuntimeError("cv2.imencode failed for heatmap JPEG")
     return base64.b64encode(buf.tobytes()).decode("ascii")
