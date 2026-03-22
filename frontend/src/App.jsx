@@ -57,36 +57,57 @@ function ZoneGridPanel({ cells, onSelectZone }) {
 const SURGE_BADGE = {
   critical: 'border-red-400/45 bg-red-500/25 text-red-50',
   warning: 'border-orange-400/40 bg-orange-500/20 text-orange-50',
+  watch: 'border-amber-400/35 bg-amber-500/15 text-amber-50',
+  safe: 'border-slate-400/35 bg-slate-500/20 text-slate-100',
 }
 
-function SurgeGlassPanel({ cells, onSelectZone }) {
-  const m = useMemo(() => computeSurgeMetrics(cells), [cells])
+/** Slightly darker glass for higher tiers (same hue from metrics). */
+const SURGE_GLASS_TIER = {
+  1: { l1: 52, l2: 44, a1: 0.15, a2: 0.07, sat: 50, dim: 0 },
+  2: { l1: 40, l2: 32, a1: 0.22, a2: 0.11, sat: 54, dim: 0.07 },
+  3: { l1: 30, l2: 22, a1: 0.3, a2: 0.16, sat: 56, dim: 0.14 },
+}
+
+function SurgeGlassPanel({ cells, onSelectZone, chipDepthTier }) {
+  const m = useMemo(
+    () =>
+      computeSurgeMetrics(cells, chipDepthTier != null ? { chipDepthTier } : {}),
+    [cells, chipDepthTier],
+  )
+  const g = SURGE_GLASS_TIER[m.tier] ?? SURGE_GLASS_TIER[1]
 
   return (
     <div
       className="relative mt-1 shrink-0 overflow-hidden rounded-2xl border border-white/15"
       style={{
-        background: `linear-gradient(155deg, hsla(${m.hue}, 58%, 48%, 0.16), hsla(${m.hueAccent}, 48%, 40%, 0.06))`,
+        background: `linear-gradient(155deg, hsla(${m.hue}, ${g.sat}%, ${g.l1}%, ${g.a1}), hsla(${m.hueAccent}, ${g.sat - 2}%, ${g.l2}%, ${g.a2}))`,
         boxShadow:
-          'inset 0 1px 0 0 rgba(255,255,255,0.14), 0 12px 40px rgba(0,0,0,0.45)',
+          'inset 0 1px 0 0 rgba(255,255,255,0.12), 0 12px 40px rgba(0,0,0,0.45)',
       }}
     >
+      {g.dim > 0 ? (
+        <div
+          className="pointer-events-none absolute inset-0 bg-black"
+          style={{ opacity: g.dim }}
+          aria-hidden
+        />
+      ) : null}
       <div
-        className="pointer-events-none absolute inset-0 bg-gradient-to-br from-white/[0.12] via-transparent to-slate-900/20"
+        className="pointer-events-none absolute inset-0 bg-gradient-to-br from-white/[0.1] via-transparent to-slate-900/35"
         aria-hidden
       />
       <div className="relative backdrop-blur-2xl">
         <div className="flex items-start justify-between gap-3 border-b border-white/10 px-3 py-2.5">
           <div>
-            <p className="font-mono text-[10px] font-medium uppercase tracking-[0.2em] text-white/55">
+            <p className="font-mono text-[10px] font-medium uppercase tracking-[0.2em] text-white/50">
               Surge risk
             </p>
             <p className="mt-0.5 text-sm font-semibold leading-snug text-white/95">{m.tierLabel}</p>
           </div>
           <div
-            className="flex shrink-0 flex-col items-center justify-center rounded-xl border border-white/15 bg-black/25 px-3 py-2 text-center shadow-inner"
+            className="flex shrink-0 flex-col items-center justify-center rounded-xl border border-white/15 bg-black/30 px-3 py-2 text-center shadow-inner"
             style={{
-              boxShadow: `inset 0 0 24px hsla(${m.hue}, 70%, 50%, 0.12)`,
+              boxShadow: `inset 0 0 24px hsla(${m.hue}, 65%, 40%, 0.15)`,
             }}
           >
             <span className="font-mono text-2xl font-bold tabular-nums leading-none text-white">
@@ -100,7 +121,8 @@ function SurgeGlassPanel({ cells, onSelectZone }) {
           {m.redOrangeBlocks.length > 0 ? (
             <div>
               <p className="mb-1.5 font-mono text-[9px] uppercase tracking-wide text-white/45">
-                Warning + critical blocks
+                Priority 1 = respond first · depth {m.sliceTierUsed}/3 (
+                {m.chipDepthSource === 'segment' ? 'timeline' : 'pipeline'})
               </p>
               <div className="flex flex-wrap gap-1.5">
                 {m.redOrangeBlocks.map((z) => (
@@ -108,8 +130,8 @@ function SurgeGlassPanel({ cells, onSelectZone }) {
                     key={z.id}
                     type="button"
                     onClick={() => onSelectZone?.(z.id)}
-                    className={`rounded-md border px-2 py-0.5 font-mono text-[10px] transition hover:brightness-110 ${SURGE_BADGE[z.surgeLevel] ?? SURGE_BADGE.warning}`}
-                    title={`${z.id} · ${z.surgeLevel} · ${((Number(z.density_pct) || 0) * 100).toFixed(0)}%`}
+                    className={`rounded-md border px-2 py-0.5 font-mono text-[10px] transition hover:brightness-110 ${SURGE_BADGE[z.surgeLevel] ?? SURGE_BADGE.safe}`}
+                    title={`#${z.priorityRank} priority · ${z.id} · ${z.surgeLevel} · ${((Number(z.density_pct) || 0) * 100).toFixed(0)}%`}
                   >
                     {z.id.replace('Z-', '')}
                   </button>
@@ -117,10 +139,10 @@ function SurgeGlassPanel({ cells, onSelectZone }) {
               </div>
             </div>
           ) : (
-            <p className="font-mono text-[10px] text-white/55">
-              {m.tier === 2 && m.watchCount > 0
-                ? 'No orange/red-class blocks — watch-tier (yellow) only.'
-                : 'No warning or critical-class blocks in this snapshot.'}
+            <p className="font-mono text-[10px] text-white/50">
+              {m.nonBlueCount === 0
+                ? 'Uniform relative heat — no non-blue band to list.'
+                : 'Nothing in this tier’s slice.'}
             </p>
           )}
         </div>
@@ -150,6 +172,10 @@ export default function App() {
   const videoCleanupRef = useRef(null)
   const videoDomRef = useRef(null)
   const [bakedSegmentIndex, setBakedSegmentIndex] = useState(0)
+  /** Live WS: same 1/3 timeline as video → drives chip depth when pipeline tier is flat */
+  const [liveTimelineTier, setLiveTimelineTier] = useState(1)
+  /** Busts player cache when ``test.mp4`` on disk is replaced (mtime + size from API). */
+  const [demoVideoRev, setDemoVideoRev] = useState('')
   /** Real API: only the first Play after load should reset the backend session (~15s/snap). Loop/buffer glitches must not call session_restart. */
   const mlSessionStartedRef = useRef(false)
 
@@ -207,7 +233,35 @@ export default function App() {
   }, [mockWs])
 
   useEffect(() => {
-    if (mockWs || densitySource !== 'baked') return
+    if (mockWs) return
+    let cancelled = false
+    const tick = async () => {
+      try {
+        const r = await fetch('/api/video/demo-meta')
+        if (!r.ok) return
+        const j = await r.json()
+        const rev = `${j.mtime}-${j.size}`
+        if (!cancelled) setDemoVideoRev(rev)
+      } catch {
+        /* ignore */
+      }
+    }
+    tick()
+    const id = setInterval(tick, 3000)
+    const onVis = () => {
+      if (document.visibilityState === 'visible') tick()
+    }
+    document.addEventListener('visibilitychange', onVis)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+      document.removeEventListener('visibilitychange', onVis)
+    }
+  }, [mockWs])
+
+  useEffect(() => {
+    if (mockWs) return
+    if (densitySource !== 'baked' && densitySource !== 'live_ws') return
     const el = videoDomRef.current
     if (!el) return
     const sync = () => {
@@ -215,7 +269,8 @@ export default function App() {
       if (!Number.isFinite(d) || d <= 0) return
       const t = el.currentTime / d
       const idx = t < 1 / 3 ? 0 : t < 2 / 3 ? 1 : 2
-      setBakedSegmentIndex(idx)
+      if (densitySource === 'baked') setBakedSegmentIndex(idx)
+      if (densitySource === 'live_ws') setLiveTimelineTier(idx + 1)
     }
     sync()
     el.addEventListener('timeupdate', sync)
@@ -457,8 +512,13 @@ export default function App() {
             <div className="relative flex h-full min-h-[240px] items-center justify-center overflow-hidden rounded bg-black/40">
               <video
                 ref={videoRefCallback}
+                key={demoVideoRev || 'demo-video'}
                 className="h-full max-h-full w-full object-contain"
-                src="/api/video/demo"
+                src={
+                  demoVideoRev
+                    ? `/api/video/demo?v=${encodeURIComponent(demoVideoRev)}`
+                    : '/api/video/demo'
+                }
                 controls
                 playsInline
                 muted
@@ -519,6 +579,13 @@ export default function App() {
                 <SurgeGlassPanel
                   cells={displayPayload.grid.cells}
                   onSelectZone={setSelectedZone}
+                  chipDepthTier={
+                    densitySource === 'baked'
+                      ? bakedSegmentIndex + 1
+                      : densitySource === 'live_ws'
+                        ? liveTimelineTier
+                        : undefined
+                  }
                 />
               ) : null}
             </div>

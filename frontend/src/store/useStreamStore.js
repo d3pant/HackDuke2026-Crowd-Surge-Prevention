@@ -49,11 +49,25 @@ function relativeLuminanceCss(rgb) {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b
 }
 
-function cellSortValue(c) {
+export function cellSortValue(c) {
   if (c.density_pct != null && !Number.isNaN(Number(c.density_pct))) {
     return Number(c.density_pct)
   }
   return Number(c.count ?? 0)
+}
+
+/**
+ * Normalized rank in [0, 1] for this snapshot — same basis as zone grid colors
+ * (min → blue, max → red in {@link getZoneCellChrome}).
+ */
+export function relativeHeatT(cells, cell) {
+  if (!cells?.length) return 0.5
+  const values = cells.map(cellSortValue)
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const span = max - min
+  const v = cellSortValue(cell)
+  return span < 1e-12 ? 0.5 : (v - min) / span
 }
 
 /**
@@ -67,12 +81,7 @@ export function getZoneCellChrome(cells, cell) {
       color: '#f8fafc',
     }
   }
-  const values = cells.map(cellSortValue)
-  const min = Math.min(...values)
-  const max = Math.max(...values)
-  const span = max - min
-  const v = cellSortValue(cell)
-  const t = span < 1e-12 ? 0.5 : (v - min) / span
+  const t = relativeHeatT(cells, cell)
   const rgb = heatSpectrumRgb(t)
   const bg = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`
   const lum = relativeLuminanceCss(rgb)

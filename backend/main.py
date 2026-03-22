@@ -227,6 +227,15 @@ def _resolve_demo_video_path() -> Optional[str]:
     return None
 
 
+def _demo_video_path_resolved() -> Optional[str]:
+    path = getattr(app.state, "demo_video_path", None)
+    if not path or not os.path.isfile(path):
+        path = _resolve_demo_video_path()
+    if path and os.path.isfile(path):
+        return path
+    return None
+
+
 @app.on_event("startup")
 async def startup():
     print("Starting CrowdSense API...")
@@ -285,13 +294,28 @@ def health():
     }
 
 
+@app.get("/api/video/demo-meta")
+def demo_video_meta():
+    """mtime + size so the UI can bust cache when ``test.mp4`` is replaced with another file."""
+    path = _demo_video_path_resolved()
+    if not path:
+        raise HTTPException(
+            status_code=404,
+            detail="No .mp4 under backend/data — add one under data/demo_footage/",
+        )
+    st = os.stat(path)
+    return {
+        "filename": os.path.basename(path),
+        "mtime": st.st_mtime,
+        "size": st.st_size,
+    }
+
+
 @app.get("/api/video/demo")
 def demo_video():
     """Demo MP4 for the dashboard — prefers ``data/demo_footage/test.mp4``."""
-    path = getattr(app.state, "demo_video_path", None)
-    if not path or not os.path.isfile(path):
-        path = _resolve_demo_video_path()
-    if not path or not os.path.isfile(path):
+    path = _demo_video_path_resolved()
+    if not path:
         raise HTTPException(
             status_code=404,
             detail="No .mp4 under backend/data — add one under data/demo_footage/",
@@ -300,6 +324,10 @@ def demo_video():
         path,
         media_type="video/mp4",
         filename=os.path.basename(path),
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+        },
     )
 
 
