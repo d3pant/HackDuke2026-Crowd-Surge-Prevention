@@ -18,10 +18,22 @@ function levelFromDensity(densityPct) {
 }
 
 /**
+ * Per playback session: reset when the user presses play so snap #1,2,3… are
+ * easy to see (≥3 heatmap refreshes in a few seconds at 800ms ticks).
+ */
+let mockSnapshotSeq = 0
+
+export function resetMockSnapshotCounter() {
+  mockSnapshotSeq = 0
+}
+
+/**
  * Mock density payload (PRD TASK 3.2): 48 cells, Z-C4 forced critical @ count 78,
  * growth_rate in [0, 0.3].
  */
 export function buildMockDensityPayload() {
+  mockSnapshotSeq += 1
+  const snapAt = Date.now() / 1000
   const cells = []
   for (let row = 0; row < ROWS; row++) {
     for (let col = 0; col < COLS; col++) {
@@ -73,10 +85,33 @@ export function buildMockDensityPayload() {
       cells,
     },
     alerts,
+    heatmap_jpeg_b64: null,
+    snapshot_index: mockSnapshotSeq,
+    snapshot_at_sec: snapAt,
   }
 }
 
-const WS_URL = 'ws://localhost:8000/ws/density'
+function wsDensityUrl() {
+  const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
+  return `${proto}://${window.location.host}/ws/density`
+}
+
+/** Real WS only: send playback / session flags (set by video element sync in App). */
+const wsControlRef = { send: null }
+
+/**
+ * @param {Partial<{ playback_playing: boolean, video_ended: boolean, session_restart: boolean }>} overrides
+ */
+export function sendWsControl(overrides = {}) {
+  const send = wsControlRef.send
+  if (!send) return
+  const s = useStreamStore.getState()
+  send({
+    playback_playing: overrides.playback_playing ?? s.videoPlaying,
+    video_ended: overrides.video_ended ?? false,
+    session_restart: overrides.session_restart ?? false,
+  })
+}
 
 export function useWebSocket() {
   useEffect(() => {
@@ -84,12 +119,14 @@ export function useWebSocket() {
     const setState = useStreamStore.setState
 
     if (mock) {
-      setState({ connectionStatus: 'connected' })
+      setState({ connectionStatus: 'connected', payload: null })
       const tick = () => {
+        const s = useStreamStore.getState()
+        if (!s.videoPlaying && !s.demoLiveMode) return
         setState({ payload: buildMockDensityPayload(), connectionStatus: 'connected' })
       }
-      tick()
-      const id = setInterval(tick, 1000)
+      const tickMs = Number(import.meta.env.VITE_MOCK_TICK_MS) || 800
+      const id = setInterval(tick, tickMs)
       return () => clearInterval(id)
     }
 
@@ -101,10 +138,20 @@ export function useWebSocket() {
       if (cancelled) return
       setState({ connectionStatus: 'connecting' })
 
-      ws = new WebSocket(WS_URL)
+      ws = new WebSocket(wsDensityUrl())
 
       ws.onopen = () => {
         setState({ connectionStatus: 'connected' })
+        wsControlRef.send = (msg) => {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            try {
+              ws.send(JSON.stringify(msg))
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+        sendWsControl({})
       }
 
       ws.onmessage = (ev) => {
@@ -117,6 +164,7 @@ export function useWebSocket() {
       }
 
       ws.onclose = () => {
+        wsControlRef.send = null
         setState({ connectionStatus: 'disconnected' })
         if (!cancelled) {
           reconnectTimer = window.setTimeout(connect, 3000)
@@ -132,6 +180,7 @@ export function useWebSocket() {
 
     return () => {
       cancelled = true
+      wsControlRef.send = null
       clearTimeout(reconnectTimer)
       if (ws && ws.readyState === WebSocket.OPEN) ws.close()
     }

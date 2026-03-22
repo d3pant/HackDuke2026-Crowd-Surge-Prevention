@@ -70,6 +70,7 @@ class VideoSimulator:
         self._frame_index = 0
         with self._frame_lock:
             self._latest = None
+        self._pause.set()
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
 

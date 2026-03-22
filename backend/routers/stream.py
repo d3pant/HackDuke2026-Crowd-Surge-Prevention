@@ -97,14 +97,84 @@ def get_mock_payload():
                 "growth_rate": 0.21,
                 "message": "Surge detected — Zone C4 at 97.6% capacity with 21% growth"
             }
-        ]
+        ],
+        "heatmap_jpeg_b64": None,
+        "snapshot_index": 0,
+        "snapshot_at_sec": None,
     }
+
+
+def idle_real_payload() -> dict:
+    """Empty grid when the model is loaded but the client has not started video playback yet."""
+    return {
+        "timestamp": int(datetime.utcnow().timestamp()),
+        "venue_id": "festival_v1",
+        "total_count": 0.0,
+        "venue_capacity": 12000,
+        "grid": {"rows": 6, "cols": 8, "cells": []},
+        "alerts": [],
+        "heatmap_jpeg_b64": None,
+        "snapshot_index": 0,
+        "snapshot_at_sec": None,
+        "density_phase": "idle",
+    }
+
+
+def reset_density_session(app):
+    """New play session: clear ML buffers, heatmap history, and restart the video simulator."""
+    app.state.latest_payload = {}
+    app.state.latest_snapshot = {}
+    app.state.session_play_heatmap_count = 0
+    app.state.density_finalize_requested = False
+    app.state.density_finalize_complete = False
+    app.state.snapshot_index_counter = 0
+    app.state.cell_history = {}
+    app.state.pipeline_grid_reset = True
+    app.state.pipeline_snapshot_ts_reset = True
+    sim = getattr(app.state, "simulator", None)
+    if sim:
+        try:
+            sim.reset()
+        except Exception as e:
+            print(f"Simulator reset: {e}")
+
+
+def merge_snapshot_into_ws_payload(app, payload: dict) -> dict:
+    """Attach JPEG snapshot when available; final frame uses paired_payload so grid matches heatmap."""
+    snap = getattr(app.state, "latest_snapshot", None) or {}
+    b64 = snap.get("heatmap_jpeg_b64")
+    has_latest = bool(getattr(app.state, "latest_payload", None))
+    show = bool(b64) and (has_latest or snap.get("is_session_final"))
+    out = dict(payload)
+    if show:
+        out["heatmap_jpeg_b64"] = b64
+        out["snapshot_index"] = snap.get("snapshot_index", 0)
+        out["snapshot_at_sec"] = snap.get("snapshot_at_sec")
+        if snap.get("is_session_final") and isinstance(snap.get("paired_payload"), dict):
+            pp = snap["paired_payload"]
+            for key in ("grid", "alerts", "total_count", "timestamp", "venue_id"):
+                if key in pp:
+                    out[key] = pp[key]
+        out["density_phase"] = "session_final_ready" if snap.get("is_session_final") else "live"
+        return out
+    out["heatmap_jpeg_b64"] = None
+    out["snapshot_index"] = 0
+    out["snapshot_at_sec"] = None
+    if not has_latest:
+        out["density_phase"] = "idle"
+    else:
+        out["density_phase"] = "no_snapshot"
+    return out
+
 
 async def check_and_create_incidents(payload: dict, request):
     from models.db import SessionLocal, Incident
+    cells = (payload.get("grid") or {}).get("cells") or []
+    if not cells:
+        return
     db = SessionLocal()
     try:
-        for cell in payload["grid"]["cells"]:
+        for cell in cells:
             if cell["level"] == "critical":
                 zone_id = cell["id"]
                 if zone_id not in known_critical_zones:
@@ -134,20 +204,53 @@ async def check_and_create_incidents(payload: dict, request):
 async def density_websocket(websocket: WebSocket):
     await websocket.accept()
     active_connections.add(websocket)
+    app = websocket.app
     print(f"Client connected. Total connections: {len(active_connections)}")
 
     try:
         while True:
-            # get latest payload from app state, fall back to mock
-            payload = websocket.app.state.latest_payload
-            if not payload:
-                payload = get_mock_payload()
+            raw = None
+            try:
+                raw = await asyncio.wait_for(websocket.receive_text(), timeout=1.0)
+            except asyncio.TimeoutError:
+                pass
+            except WebSocketDisconnect:
+                raise
 
-            # auto create incidents for critical zones
+            if raw:
+                try:
+                    data = json.loads(raw)
+                    if isinstance(data, dict):
+                        if data.get("session_restart"):
+                            reset_density_session(app)
+                        if data.get("video_ended"):
+                            app.state.client_playback_active = False
+                            app.state.density_finalize_requested = True
+                            app.state.density_finalize_complete = False
+                            sim = getattr(app.state, "simulator", None)
+                            if sim:
+                                try:
+                                    sim.pause()
+                                except Exception:
+                                    pass
+                        elif "playback_playing" in data:
+                            app.state.client_playback_active = bool(data["playback_playing"])
+                except json.JSONDecodeError:
+                    pass
+
+            latest = app.state.latest_payload
+            if not latest:
+                if app.state.model is not None:
+                    payload = idle_real_payload()
+                else:
+                    payload = get_mock_payload()
+            else:
+                payload = dict(latest)
+
+            payload = merge_snapshot_into_ws_payload(app, payload)
+
             await check_and_create_incidents(payload, websocket)
-
             await websocket.send_json(payload)
-            await asyncio.sleep(1)
 
     except WebSocketDisconnect:
         active_connections.discard(websocket)
@@ -155,4 +258,7 @@ async def density_websocket(websocket: WebSocket):
     except Exception as e:
         print(f"WebSocket error: {e}")
         active_connections.discard(websocket)
+    finally:
+        if len(active_connections) == 0:
+            app.state.client_playback_active = False
 
