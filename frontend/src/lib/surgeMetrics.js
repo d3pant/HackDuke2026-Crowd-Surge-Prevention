@@ -12,6 +12,12 @@ export const PIPELINE_DENSITY_BANDS = {
   critical: 0.95,
 }
 
+/**
+ * Surge risk chips: normalized count/capacity must be ≥ this (fraction; 3.5 = 350% of cell capacity).
+ * Raised well above the pipeline “critical” band (0.95) so only the most overloaded zones appear.
+ */
+export const SURGE_CHIP_MIN_DENSITY = 3.5
+
 const TIER = {
   NONE: 1,
   RISKY: 2,
@@ -25,21 +31,48 @@ const LABEL = {
 }
 
 /**
+ * Backend `compute_levels` uses density = count/capacity (fraction, can exceed 1).
+ * Some snapshots expose the same quantity as 0–100+ (e.g. 53 for 53%). Detect once
+ * per grid so thresholds match pipeline.py.
+ *
+ * @param {Array<{ density_pct?: number }>} cells
+ * @returns {(cell: { density_pct?: number }) => number}
+ */
+export function densityFracFromSnapshot(cells) {
+  const vals = cells
+    .map((c) => Number(c.density_pct ?? 0))
+    .filter((v) => !Number.isNaN(v))
+  const max = vals.length ? Math.max(...vals) : 0
+  // Fraction overload is rarely > ~10×; 0–100 scale has typical values 5–95+.
+  const looksLikePercentScale = max > 30
+  return (cell) => {
+    const d = Number(cell.density_pct ?? 0)
+    if (Number.isNaN(d)) return 0
+    return looksLikePercentScale ? d / 100 : d
+  }
+}
+
+/**
  * Map a cell to a level using server `level` if set, else density_pct vs pipeline bands
  * (same thresholds as compute_levels, without prev_level / growth_rate hysteresis).
  *
  * @param {{ level?: string, density_pct?: number }} cell
+ * @param {(cell: { density_pct?: number }) => number} [frac]
  */
-export function effectiveSurgeLevel(cell) {
+export function effectiveSurgeLevel(cell, frac) {
   const lv = cell.level
   if (lv === 'critical' || lv === 'warning' || lv === 'watch' || lv === 'safe') {
     return lv
   }
-  const d = Number(cell.density_pct ?? 0)
+  const d = frac ? frac(cell) : Number(cell.density_pct ?? 0)
   if (d >= PIPELINE_DENSITY_BANDS.critical) return 'critical'
   if (d >= PIPELINE_DENSITY_BANDS.warning) return 'warning'
   if (d >= PIPELINE_DENSITY_BANDS.watch) return 'watch'
   return 'safe'
+}
+
+export function isSurgeChipDensity(cell, frac) {
+  return frac(cell) >= SURGE_CHIP_MIN_DENSITY
 }
 
 /**
@@ -51,8 +84,9 @@ export function computeSurgeMetrics(cells) {
       tier: TIER.NONE,
       tierLabel: LABEL[1],
       sub: 'Waiting for zone grid…',
-      /** critical + warning only (red / orange on grid) */
       redOrangeBlocks: [],
+      criticalBlocks: [],
+      surgeChipMinPct: Math.round(SURGE_CHIP_MIN_DENSITY * 100),
       watchCount: 0,
       criticalCount: 0,
       warningCount: 0,
@@ -61,12 +95,14 @@ export function computeSurgeMetrics(cells) {
     }
   }
 
+  const frac = densityFracFromSnapshot(cells)
+
   let criticalCount = 0
   let warningCount = 0
   let watchCount = 0
 
   for (const c of cells) {
-    const el = effectiveSurgeLevel(c)
+    const el = effectiveSurgeLevel(c, frac)
     if (el === 'critical') criticalCount += 1
     else if (el === 'warning') warningCount += 1
     else if (el === 'watch') watchCount += 1
@@ -82,26 +118,32 @@ export function computeSurgeMetrics(cells) {
     tier = TIER.NONE
   }
 
-  const redOrangeBlocks = [...cells]
-    .map((c) => {
-      const el = effectiveSurgeLevel(c)
-      return { ...c, surgeLevel: el }
-    })
+  const enriched = [...cells].map((c) => {
+    const el = effectiveSurgeLevel(c, frac)
+    return { ...c, surgeLevel: el, densityFrac: frac(c) }
+  })
+
+  const redOrangeBlocks = enriched
     .filter((c) => c.surgeLevel === 'critical' || c.surgeLevel === 'warning')
     .sort(
       (a, b) =>
         (b.surgeLevel === 'critical' ? 1 : 0) - (a.surgeLevel === 'critical' ? 1 : 0) ||
-        (Number(b.density_pct ?? 0) - Number(a.density_pct ?? 0)),
+        (Number(b.densityFrac ?? 0) - Number(a.densityFrac ?? 0)),
     )
 
+  const criticalBlocks = enriched
+    .filter((c) => isSurgeChipDensity(c, frac))
+    .sort((a, b) => Number(b.densityFrac ?? 0) - Number(a.densityFrac ?? 0))
+
+  const chipPct = Math.round(SURGE_CHIP_MIN_DENSITY * 100)
   let sub
   if (tier === TIER.SURGE) {
-    sub = `Critical band (≥${Math.round(PIPELINE_DENSITY_BANDS.critical * 100)}% of cell capacity, same rule as the API).`
+    sub = `Chips list zones at ≥${chipPct}% of cell capacity (extreme overload only).`
   } else if (tier === TIER.RISKY) {
     if (redOrangeBlocks.length > 0) {
-      sub = `Warning/critical-class zones below; ${watchCount} watch-tier zone(s) elsewhere on the grid.`
+      sub = `Chips use ≥${chipPct}% capacity, not API tier labels. ${watchCount} watch-tier zone(s) elsewhere.`
     } else {
-      sub = `Watch-tier only (≥${Math.round(PIPELINE_DENSITY_BANDS.watch * 100)}% capacity); chips list warning + critical only.`
+      sub = `Watch-tier only (≥${Math.round(PIPELINE_DENSITY_BANDS.watch * 100)}% capacity); chips need ≥${chipPct}% capacity.`
     }
   } else {
     sub = `Below watch threshold (<${Math.round(PIPELINE_DENSITY_BANDS.watch * 100)}% of cell capacity per pipeline).`
@@ -117,6 +159,8 @@ export function computeSurgeMetrics(cells) {
     tierLabel: LABEL[tier],
     sub,
     redOrangeBlocks,
+    criticalBlocks,
+    surgeChipMinPct: chipPct,
     watchCount,
     criticalCount,
     warningCount,

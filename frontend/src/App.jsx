@@ -29,7 +29,7 @@ function ZoneGridPanel({ cells, onSelectZone }) {
   }, [cells])
 
   return (
-    <div className="grid h-full min-h-[200px] grid-cols-8 grid-rows-6 gap-1">
+    <div className="grid h-full w-full min-h-0 grid-cols-8 grid-rows-6 gap-1">
       {sorted.map((c) => {
         const chrome = getZoneCellChrome(sorted, c)
         const pct =
@@ -97,19 +97,19 @@ function SurgeGlassPanel({ cells, onSelectZone }) {
         </div>
         <div className="space-y-2 px-3 pb-3 pt-2">
           <p className="text-[11px] leading-relaxed text-white/70">{m.sub}</p>
-          {m.redOrangeBlocks.length > 0 ? (
+          {m.criticalBlocks.length > 0 ? (
             <div>
-              <p className="mb-1.5 font-mono text-[9px] uppercase tracking-wide text-white/45">
-                Warning + critical blocks
+              <p className="mb-1.5 font-mono text-[9px] tracking-wide text-white/55 normal-case">
+                Zones to monitor (highest to lowest risk)
               </p>
               <div className="flex flex-wrap gap-1.5">
-                {m.redOrangeBlocks.map((z) => (
+                {m.criticalBlocks.map((z) => (
                   <button
                     key={z.id}
                     type="button"
                     onClick={() => onSelectZone?.(z.id)}
-                    className={`rounded-md border px-2 py-0.5 font-mono text-[10px] transition hover:brightness-110 ${SURGE_BADGE[z.surgeLevel] ?? SURGE_BADGE.warning}`}
-                    title={`${z.id} · ${z.surgeLevel} · ${((Number(z.density_pct) || 0) * 100).toFixed(0)}%`}
+                    className={`rounded-md border px-2 py-0.5 font-mono text-[10px] transition hover:brightness-110 ${SURGE_BADGE.critical}`}
+                    title={`${z.id} · ≥${m.surgeChipMinPct}% capacity · ${((Number(z.densityFrac ?? z.density_pct) || 0) * 100).toFixed(0)}%`}
                   >
                     {z.id.replace('Z-', '')}
                   </button>
@@ -118,9 +118,9 @@ function SurgeGlassPanel({ cells, onSelectZone }) {
             </div>
           ) : (
             <p className="font-mono text-[10px] text-white/55">
-              {m.tier === 2 && m.watchCount > 0
-                ? 'No orange/red-class blocks — watch-tier (yellow) only.'
-                : 'No warning or critical-class blocks in this snapshot.'}
+              {m.warningCount > 0 || m.watchCount > 0
+                ? `No zones at ≥${m.surgeChipMinPct}% capacity — lower density on the grid.`
+                : 'No zones exceed the surge chip threshold in this snapshot.'}
             </p>
           )}
         </div>
@@ -413,26 +413,7 @@ export default function App() {
       </header>
 
       <div className="flex min-h-0 flex-1 gap-3 p-3">
-        {/* B: Left — zone grid */}
-        <aside className="flex w-[min(100%,22rem)] shrink-0 flex-col">
-          <PanelShell title="Zone grid" className="min-h-0 flex-1">
-            {!displayPayload?.grid?.cells?.length ? (
-              <div className="space-y-2 text-xs leading-relaxed text-muted">
-                <p>
-                  Press play on the video, or use <strong className="text-ink">Start demo</strong>{' '}
-                  below if the video fails to load (backend must be running for the file).
-                </p>
-              </div>
-            ) : (
-              <ZoneGridPanel
-                cells={displayPayload.grid.cells}
-                onSelectZone={setSelectedZone}
-              />
-            )}
-          </PanelShell>
-        </aside>
-
-        {/* B: Center — live video (independent of ML frame rate) */}
+        {/* Left — live video (independent of ML frame rate) */}
         <main className="flex min-w-0 flex-1 flex-col">
           <PanelShell title="Live feed" className="min-h-0 flex-1">
             {import.meta.env.VITE_MOCK_WS === 'true' && (
@@ -491,38 +472,54 @@ export default function App() {
           </PanelShell>
         </main>
 
-        {/* B: Right — density snapshot + liquid-glass surge tab */}
-        <aside className="flex w-[min(100%,min(90vw,40rem))] shrink-0 flex-col">
-          <PanelShell title="Density snapshot" className="min-h-0 flex-1">
-            <div className="flex min-h-0 flex-1 flex-col gap-2">
+        {/* Right — density snapshot + zone grid (same width & 16:9 frame, stacked) + surge */}
+        <aside className="flex w-[min(100%,min(90vw,40rem))] shrink-0 flex-col gap-3 overflow-y-auto">
+          {/* Shared frame: full width of column, identical aspect for snapshot + grid */}
+          <PanelShell title="Density snapshot" className="shrink-0 p-3">
+            <div className="aspect-video w-full overflow-hidden rounded-lg bg-black/30">
               {snapshotImageSrc ? (
-                <div className="flex min-h-[120px] flex-1 flex-col overflow-hidden rounded-lg bg-black/30">
-                  <div className="flex min-h-0 flex-1 items-start justify-center overflow-auto">
-                    <img
-                      key={`snap-${displayPayload?.playback_loop ?? 0}-${displayPayload?.snapshot_index ?? 0}-${heatmapB64ForDisplay?.length ?? 0}`}
-                      src={snapshotImageSrc}
-                      alt="Density snapshot: frame blend, zone grid, and density color scale"
-                      className="h-auto w-full max-w-full object-contain object-top"
-                    />
-                  </div>
-                </div>
+                <img
+                  key={`snap-${displayPayload?.playback_loop ?? 0}-${displayPayload?.snapshot_index ?? 0}-${heatmapB64ForDisplay?.length ?? 0}`}
+                  src={snapshotImageSrc}
+                  alt="Density snapshot: frame blend, zone grid, and density color scale"
+                  className="h-full w-full object-contain object-center"
+                />
               ) : (
-                <p className="text-xs leading-relaxed text-muted">
+                <div className="flex h-full items-center justify-center px-3 text-center text-xs leading-relaxed text-muted">
                   No snapshot yet. Set <code className="text-ink/80">VITE_MOCK_WS=false</code>, run
                   the API with CSRNet weights and <code className="text-ink/80">test.mp4</code> in{' '}
-                  <code className="text-ink/80">data/demo_footage/</code>. Each snapshot is a JPEG
-                  like the <code className="text-ink/80">heatmap_highest.png</code> pipeline from{' '}
-                  <code className="text-ink/80">test_local</code>.
-                </p>
+                  <code className="text-ink/80">data/demo_footage/</code>.
+                </div>
               )}
-              {displayPayload?.grid?.cells?.length ? (
-                <SurgeGlassPanel
+            </div>
+          </PanelShell>
+
+          <PanelShell title="Zone grid" className="shrink-0 p-3">
+            {!displayPayload?.grid?.cells?.length ? (
+              <div className="aspect-video w-full rounded-lg border border-border/50 bg-black/20 px-3 py-4 text-xs leading-relaxed text-muted">
+                <p>
+                  Press play on the video, or use <strong className="text-ink">Start demo</strong>{' '}
+                  if the video fails to load (backend must be running for the file).
+                </p>
+              </div>
+            ) : (
+              <div className="aspect-video w-full overflow-hidden rounded-lg border border-border/40 bg-black/25 p-1">
+                <ZoneGridPanel
                   cells={displayPayload.grid.cells}
                   onSelectZone={setSelectedZone}
                 />
-              ) : null}
-            </div>
+              </div>
+            )}
           </PanelShell>
+
+          {displayPayload?.grid?.cells?.length ? (
+            <div className="shrink-0">
+              <SurgeGlassPanel
+                cells={displayPayload.grid.cells}
+                onSelectZone={setSelectedZone}
+              />
+            </div>
+          ) : null}
         </aside>
       </div>
 
