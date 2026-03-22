@@ -14,7 +14,7 @@ from routers import incidents, stream
 
 from ml.bake_demo import precompute_demo_bundle_sync
 
-app = FastAPI(title="CrowdSense API")
+app = FastAPI(title="CrowdShield API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -229,7 +229,7 @@ def _resolve_demo_video_path() -> Optional[str]:
 
 @app.on_event("startup")
 async def startup():
-    print("Starting CrowdSense API...")
+    print("Starting CrowdShield API...")
 
     # initialize app state
     app.state.latest_payload = {}
@@ -270,7 +270,7 @@ async def startup():
     asyncio.create_task(startup_ml_chain())
     asyncio.create_task(pipeline_loop())
     print("Pipeline loop started")
-    print("CrowdSense API ready!")
+    print("CrowdShield API ready!")
 
 
 

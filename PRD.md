@@ -1,4 +1,4 @@
-# CrowdSense — Agent Implementation Guide
+# CrowdShield — Agent Implementation Guide
 > AI-Powered Crowd Surge Detection & Security Response  
 > Hackathon Edition · v1.0 · March 2026
 
@@ -29,7 +29,7 @@ Do not skip ahead. Phases 1–2 (backend + ML) must be functional before Phase 4
 Create this exact directory layout before writing any code:
 
 ```
-crowdsense/
+crowdshield/
 ├── backend/
 │   ├── main.py
 │   ├── routers/
@@ -46,7 +46,7 @@ crowdsense/
 │   │   └── schemas.py
 │   ├── data/
 │   │   ├── demo_footage/     # place demo .mp4 here
-│   │   └── crowdsense.db     # auto-created at runtime
+│   │   └── crowdshield.db     # auto-created at runtime
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
@@ -255,7 +255,7 @@ class VideoSimulator:
 
 ### TASK 2.1 — `backend/models/db.py`
 
-Define SQLAlchemy ORM models. Use SQLite at `data/crowdsense.db`. Call `Base.metadata.create_all()` on startup.
+Define SQLAlchemy ORM models. Use SQLite at `data/crowdshield.db`. Call `Base.metadata.create_all()` on startup.
 
 **Table: `incidents`**
 ```
@@ -818,7 +818,7 @@ On each new payload, push to history and keep only the last 60.
 ### TASK 6.5 — `frontend/src/components/TopNav.jsx`
 
 **Requirements:**
-- Left: "CrowdSense" wordmark in Inter bold, primary blue
+- Left: "CrowdShield" wordmark in Inter bold, primary blue
 - Center: "Festival Grounds · Live Event" venue/event name
 - Center-right: Pulsing dot + "LIVE" text (green) or "PAUSED" (yellow) or "OFFLINE" (red) based on `connectionStatus`
 - Right: `VenueCapacityBar` condensed inline (just the bar + percentage, no label)

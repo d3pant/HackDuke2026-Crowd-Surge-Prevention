@@ -1,1 +1,1 @@
-"""CrowdSense ML: CSRNet inference, density pipeline, video simulator."""
+"""CrowdShield ML: CSRNet inference, density pipeline, video simulator."""

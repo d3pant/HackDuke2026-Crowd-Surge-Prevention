@@ -370,7 +370,7 @@ export default function App() {
         </div>
       )}
       <header className="flex h-14 shrink-0 items-center border-b border-border bg-surface px-4">
-        <span className="font-semibold text-primary">CrowdSense</span>
+        <span className="font-semibold text-primary">CrowdShield</span>
         <span className="ml-4 text-xs text-muted">
           WS: {connectionStatus}
           {displayPayload?.timestamp != null && (
