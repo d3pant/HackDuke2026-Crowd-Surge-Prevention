@@ -8,16 +8,18 @@ import {
 import { useStreamStore, getZoneCellChrome } from './store/useStreamStore'
 import { useIncidentStore } from './store/useIncidentStore'
 import { computeSurgeMetrics } from './lib/surgeMetrics'
+import { useSurgeGuardAssignments } from './lib/guardAssignments'
+import { SecurityGuardAssignmentsPanel } from './components/SecurityGuardAssignmentsPanel'
 
 function PanelShell({ title, children, className = '' }) {
   return (
     <div
-      className={`flex flex-col rounded-md border border-border bg-surface p-3 text-ink ${className}`}
+      className={`flex flex-col gap-3 rounded-md border border-border bg-surface p-3 text-ink ${className}`}
     >
-      <p className="mb-2 font-mono text-[10px] font-medium uppercase tracking-wide text-muted">
+      <p className="font-mono text-[10px] font-medium uppercase tracking-wide text-muted">
         {title}
       </p>
-      <div className="min-h-0 flex-1 text-sm text-muted">{children}</div>
+      <div className="flex min-h-0 flex-1 flex-col gap-3 text-sm text-muted">{children}</div>
     </div>
   )
 }
@@ -64,24 +66,24 @@ function SurgeGlassPanel({ cells, onSelectZone }) {
 
   return (
     <div
-      className="relative mt-1 shrink-0 overflow-hidden rounded-2xl border border-white/15"
+      className="relative shrink-0 overflow-hidden rounded-2xl border border-white/15"
       style={{
         background: `linear-gradient(155deg, hsla(${m.hue}, 58%, 48%, 0.16), hsla(${m.hueAccent}, 48%, 40%, 0.06))`,
         boxShadow:
-          'inset 0 1px 0 0 rgba(255,255,255,0.14), 0 12px 40px rgba(0,0,0,0.45)',
+          'inset 0 1px 0 0 rgba(255,255,255,0.14), 0 10px 32px rgba(0,0,0,0.22)',
       }}
     >
       <div
-        className="pointer-events-none absolute inset-0 bg-gradient-to-br from-white/[0.12] via-transparent to-slate-900/20"
+        className="pointer-events-none absolute inset-0 bg-gradient-to-br from-white/[0.12] via-transparent to-slate-900/15"
         aria-hidden
       />
       <div className="relative backdrop-blur-2xl">
-        <div className="flex items-start justify-between gap-3 border-b border-white/10 px-3 py-2.5">
-          <div>
+        <div className="flex items-start justify-between gap-3 border-b border-white/10 p-3">
+          <div className="flex flex-col gap-3">
             <p className="font-mono text-[10px] font-medium uppercase tracking-[0.2em] text-white/55">
               Surge risk
             </p>
-            <p className="mt-0.5 text-sm font-semibold leading-snug text-white/95">{m.tierLabel}</p>
+            <p className="text-sm font-semibold leading-snug text-white/95">{m.tierLabel}</p>
           </div>
           <div
             className="flex shrink-0 flex-col items-center justify-center rounded-xl border border-white/15 bg-black/25 px-3 py-2 text-center shadow-inner"
@@ -95,14 +97,14 @@ function SurgeGlassPanel({ cells, onSelectZone }) {
             <span className="font-mono text-[9px] uppercase tracking-wide text-white/45">tier</span>
           </div>
         </div>
-        <div className="space-y-2 px-3 pb-3 pt-2">
+        <div className="flex flex-col gap-3 p-3 pt-0">
           <p className="text-[11px] leading-relaxed text-white/70">{m.sub}</p>
           {m.criticalBlocks.length > 0 ? (
-            <div>
-              <p className="mb-1.5 font-mono text-[9px] tracking-wide text-white/55 normal-case">
+            <div className="flex flex-col gap-3">
+              <p className="font-mono text-[9px] tracking-wide text-white/55 normal-case">
                 Zones to monitor (highest to lowest risk)
               </p>
-              <div className="flex flex-wrap gap-1.5">
+              <div className="flex flex-wrap gap-3">
                 {m.criticalBlocks.map((z) => (
                   <button
                     key={z.id}
@@ -349,11 +351,13 @@ export default function App() {
     return `data:image/jpeg;base64,${heatmapB64ForDisplay}`
   }, [heatmapB64ForDisplay])
 
+  const surgeGuardAssignments = useSurgeGuardAssignments(displayPayload)
+
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-canvas font-sans text-ink">
       {!mockWs && !bakeGateReady && (
         <div
-          className="fixed inset-0 z-[100] flex flex-col items-center justify-center gap-3 bg-canvas/95 px-6 text-center"
+          className="fixed inset-0 z-[100] flex flex-col items-center justify-center gap-3 bg-canvas/95 p-3 text-center"
           role="status"
           aria-live="polite"
         >
@@ -365,11 +369,11 @@ export default function App() {
         </div>
       )}
       {!mockWs && bakeGateReady && densitySource === 'live_ws' && bakeError && (
-        <div className="border-b border-warning/40 bg-warning/10 px-4 py-2 text-center text-xs text-ink">
+        <div className="border-b border-warning/40 bg-warning/10 px-3 py-3 text-center text-xs text-ink">
           Pre-baked density unavailable ({String(bakeError)}). Showing live WebSocket updates instead.
         </div>
       )}
-      <header className="flex h-14 shrink-0 items-center border-b border-border bg-surface px-4">
+      <header className="flex h-14 shrink-0 items-center border-b border-border bg-surface px-3">
         <span className="font-semibold text-primary">CrowdShield</span>
         <span className="ml-4 text-xs text-muted">
           WS: {connectionStatus}
@@ -417,7 +421,7 @@ export default function App() {
         <main className="flex min-w-0 flex-1 flex-col">
           <PanelShell title="Live feed" className="min-h-0 flex-1">
             {import.meta.env.VITE_MOCK_WS === 'true' && (
-              <div className="mb-2 flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-3">
                 <button
                   type="button"
                   className="rounded border border-primary bg-primary/10 px-2 py-1 text-[11px] font-medium text-ink"
@@ -450,7 +454,7 @@ export default function App() {
                 }}
               />
             </div>
-            <p className="mt-2 text-[11px] text-muted">
+            <p className="text-[11px] text-muted">
               {import.meta.env.VITE_MOCK_WS === 'true' ? (
                 <>
                   Mock mode: matrix/heatmap tick without the API. For the real pipeline, set{' '}
@@ -475,7 +479,7 @@ export default function App() {
         {/* Right — density snapshot + zone grid (same width & 16:9 frame, stacked) + surge */}
         <aside className="flex w-[min(100%,min(90vw,40rem))] shrink-0 flex-col gap-3 overflow-y-auto">
           {/* Shared frame: full width of column, identical aspect for snapshot + grid */}
-          <PanelShell title="Density snapshot" className="shrink-0 p-3">
+          <PanelShell title="Density snapshot" className="shrink-0">
             <div className="aspect-video w-full overflow-hidden rounded-lg bg-black/30">
               {snapshotImageSrc ? (
                 <img
@@ -485,7 +489,7 @@ export default function App() {
                   className="h-full w-full object-contain object-center"
                 />
               ) : (
-                <div className="flex h-full items-center justify-center px-3 text-center text-xs leading-relaxed text-muted">
+                <div className="flex h-full items-center justify-center p-3 text-center text-xs leading-relaxed text-muted">
                   No snapshot yet. Set <code className="text-ink/80">VITE_MOCK_WS=false</code>, run
                   the API with CSRNet weights and <code className="text-ink/80">test.mp4</code> in{' '}
                   <code className="text-ink/80">data/demo_footage/</code>.
@@ -494,9 +498,9 @@ export default function App() {
             </div>
           </PanelShell>
 
-          <PanelShell title="Zone grid" className="shrink-0 p-3">
+          <PanelShell title="Zone grid" className="shrink-0">
             {!displayPayload?.grid?.cells?.length ? (
-              <div className="aspect-video w-full rounded-lg border border-border/50 bg-black/20 px-3 py-4 text-xs leading-relaxed text-muted">
+              <div className="aspect-video w-full rounded-lg border border-border/50 bg-black/20 p-3 text-xs leading-relaxed text-muted">
                 <p>
                   Press play on the video, or use <strong className="text-ink">Start demo</strong>{' '}
                   if the video fails to load (backend must be running for the file).
@@ -513,11 +517,12 @@ export default function App() {
           </PanelShell>
 
           {displayPayload?.grid?.cells?.length ? (
-            <div className="shrink-0">
+            <div className="flex shrink-0 flex-col gap-3">
               <SurgeGlassPanel
                 cells={displayPayload.grid.cells}
                 onSelectZone={setSelectedZone}
               />
+              <SecurityGuardAssignmentsPanel guardToZone={surgeGuardAssignments} />
             </div>
           ) : null}
         </aside>
@@ -528,8 +533,8 @@ export default function App() {
           className="fixed inset-0 z-50 flex justify-end bg-black/50"
           role="presentation"
         >
-          <div className="flex h-full w-full max-w-md flex-col border-l border-border bg-surface p-4 shadow-xl">
-            <div className="mb-4 flex items-center justify-between">
+          <div className="flex h-full w-full max-w-md flex-col gap-3 border-l border-border bg-surface p-3 shadow-xl">
+            <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold text-ink">Zone detail</h2>
               <button
                 type="button"
@@ -545,7 +550,7 @@ export default function App() {
             </p>
             <button
               type="button"
-              className="mt-4 self-start text-sm text-primary underline"
+              className="self-start text-sm text-primary underline"
               onClick={() => setSelectedZone(null)}
             >
               Close
