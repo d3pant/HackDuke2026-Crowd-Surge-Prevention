@@ -4,6 +4,16 @@ CrowdShield is an AI-powered crowd safety platform designed to detect and respon
 
 The project combines a Python backend for ML inference, alert logic, and incident APIs with a React dashboard for live monitoring and security operations. Operators can view heatmap-driven risk levels, track incident activity, and coordinate guard dispatch before local congestion escalates into dangerous crowd events.
 
+## Model weights
+
+Download the pretrained CSRNet checkpoint and place it in the backend weights folder:
+
+1. Open [PartAmodel_best.pth.tar on Google Drive](https://drive.google.com/file/d/1GzvjzNUC_r-DFJXe5ndz4e2GRBiMc4DP/view?usp=sharing) and download the file.
+2. Create `backend/ml/weights/` if it does not exist.
+3. Put `PartAmodel_best.pth.tar` in that folder (same directory the app looks for: `backend/ml/weights/PartAmodel_best.pth.tar`).
+
+Without these weights the API still runs, but crowd density uses **mock mode** instead of the full model.
+
 ## Run locally
 
 Use two terminals from the **repository root**.
